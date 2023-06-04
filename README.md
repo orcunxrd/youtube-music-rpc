@@ -1,7 +1,7 @@
 # YouTube Music Discord RPC
 Show the songs you listen to on Youtube Music in your Discord status.
 
-![image](https://i.resm.im/ftNVukd.png)
+![image](https://i.resm.im/Vx0QqEF.png)
 
 ## Repo Installation
 ```
