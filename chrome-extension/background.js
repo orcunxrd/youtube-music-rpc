@@ -1,89 +1,83 @@
-console.log('[YTM-RPC] => Background.js loaded!');
-
 let socket = null;
-let lastMusicId = null;
 let focusedTabId = null;
+let currentMusicId = null;
+let firstInitialize = false;
 
-const sliderListener = () => {
-  console.log('SLIDER LISTENER ADDED');
-  chrome.tabs.sendMessage(focusedTabId, { action: 'sliderListener' });
-}
+const trackingInterception = async (e) => {
+  if (!e.url.startsWith('https://music.youtube.com/ptracking')) return;
+  if (!focusedTabId) focusedTabId = e.tabId;
+  if (e.tabId != focusedTabId) return;
 
-const trackingInterception = async (details) => {
-  if (!details.url.startsWith('https://music.youtube.com/ptracking')) return;
-  if (details.tabId != focusedTabId) return;
-  console.log('[YTM-RPC] (TRACKING) =>', details);
+  if (!currentMusicId)
+    chrome.tabs.sendMessage(focusedTabId, { action: 'sliderListener' });
 
-  if (!lastMusicId) sliderListener();
-  const urlParams = new URLSearchParams(details.url);
-  lastMusicId = urlParams.get('video_id');
-  console.log('[YTM-RPC] (TRACKING) => Music ID:', lastMusicId);
-
-  if (socket.readyState != 1) return;
+  const urlParams = new URLSearchParams(e.url);
+  currentMusicId = urlParams.get('video_id');
 
   socket.send(JSON.stringify({
-    action: 'setRpc',
-    data: { lastMusicId }
+    listener: 'setRpc',
+    data: { currentMusicId }
   }));
-}
 
-chrome.runtime.onMessage.addListener(async (request) => {
-  if (request.action === 'updateRpc') {
-    console.log('[YTM-RPC] (UPDATE-RPC) =>', request);
+  console.log('[YTM-RPC] (INTERCEPTION) => Music ID:', currentMusicId);
+};
 
-    socket.send(JSON.stringify({
-      action: 'updateRpc',
-      data: {
-        lastMusicId,
-        now: request.now,
-        max: request.max
-      }
-    }));
-  }
+chrome.webRequest.onCompleted.addListener(
+  trackingInterception,
+  { urls: ['https://music.youtube.com/*'] },
+);
+
+chrome.runtime.onMessage.addListener((request) => {
+  if (request.listener != 'updateRpc') return;
+
+  socket.send(JSON.stringify({
+    listener: 'updateRpc',
+    data: { currentMusicId, ...request }
+  }));
 });
 
-chrome.tabs.onRemoved.addListener(() => {
-  chrome.tabs.query({}, (tabs) => {
-    const currentTabs = tabs.filter(tab => tab.url && tab.url.includes('music.youtube.com'));
-    if (!currentTabs.length) {
-      console.log('[YTM-RPC] (REMOVE) => Last Music ID:', lastMusicId);
-      lastMusicId = null;
+chrome.tabs.onRemoved.addListener((_tabId, removeInfo) => {
+  chrome.tabs.query({ url: "https://music.youtube.com/*" }, (tabs) => {
+    const hasYtmTab = tabs.some(tab => tab.windowId === removeInfo.windowId);
+
+    if (!hasYtmTab) {
       focusedTabId = null;
-      socket.send(JSON.stringify({ action: 'removeRpc' }));
+      currentMusicId = null;
+      socket.send(JSON.stringify({ listener: 'removeRpc' }));
     }
 
-    if (currentTabs.length == 1) {
-      const lastTabId = currentTabs[0].id;
-      lastMusicId = null;
-      console.log('[YTM-RPC] (REMOVE) => Last Music ID:', lastMusicId);
+    if (tabs.length == 1) {
+      currentMusicId = null;
+      if (focusedTabId == tabs[0].id) return;
 
-      if (focusedTabId == lastTabId) return;
-      
-      focusedTabId = currentTabs[0].id;
-      chrome.tabs.reload(focusedTabId);
-      console.log('[YTM-RPC] (REMOVE) => Focused Tab ID:', focusedTabId);
+      focusedTabId = tabs[0].id;
+      socket.send(JSON.stringify({ listener: 'updateRpc', data: { action: 'idle' } }));
     }
   });
 });
 
-chrome.webNavigation.onCommitted.addListener((data) => {
-  if (!data.url.includes('music.youtube.com')) return;
-
+chrome.webNavigation.onCommitted.addListener((tab) => {
+  if (!tab.url.includes('music.youtube.com')) return;
+  
   if (!focusedTabId) {
-    focusedTabId = data.tabId;
-    return console.log('[YTM-RPC] (REFRESH) => Focused Tab ID:', focusedTabId);
+    focusedTabId = tab.tabId;
+    return;
   }
 
-  if (data.tabId != focusedTabId) return;
-  socket.send(JSON.stringify({ action: 'removeRpc' }));
+  if (tab.tabId != focusedTabId) return;
+
+  if (currentMusicId) socket.send(JSON.stringify({ listener: 'updateRpc', data: { action: 'idle' } }));
+  else socket.send(JSON.stringify({ listener: 'removeRpc' }));
+  
+  currentMusicId = null;
 });
 
 chrome.tabs.onCreated.addListener((tab) => {
   if (!tab.pendingUrl || !tab.pendingUrl.includes('music.youtube.com')) return;
-
+  
   if (!focusedTabId) {
     focusedTabId = tab.id;
-    return console.log('[YTM-RPC] (CREATE) => Focused Tab ID:', focusedTabId);
+    return;
   }
 
   if (tab.id != focusedTabId) return;
@@ -92,26 +86,16 @@ chrome.tabs.onCreated.addListener((tab) => {
 const createWs = () => {
   socket = new WebSocket('ws://localhost:3000');
 
-  socket.onclose = function (event) {
+  socket.onclose = (event) => {
     if (event.wasClean) console.log('[YTM-RPC] (WEBSOCKET) => Connection closed.');
     else {
-      console.log('[YTM-RPC] (WEBSOCKET) => Connection fucked.');
+      console.log('[YTM-RPC] (WEBSOCKET) => Connection died.');
       setTimeout(createWs, 3000);
     }
   }
 
-  socket.onopen = function () {
-    console.log('[YTM-RPC] (WEBSOCKET) => Connected.')
-  }
-
-  socket.onerror = function (error) {
-    console.log('[YTM-RPC] (WEBSOCKET) => Error:', error);
-  }
+  socket.onopen = () => console.log('[YTM-RPC] (WEBSOCKET) => Connection established.');
+  socket.onerror = (error) => console.log('[YTM-RPC] (WEBSOCKET) => Error:', error);
 }
-
-chrome.webRequest.onCompleted.addListener(
-  trackingInterception,
-  { urls: ['https://music.youtube.com/*'] },
-);
 
 createWs();

@@ -1,25 +1,45 @@
-const sliderListener = () => {
-  const targetElement = document.querySelector('#progress-bar.ytmusic-player-bar');
+console.log('[YTM-RPC] (CONTENT) => Oluşturuldu.');
+let sliderListener = null;
 
-  if (targetElement) {
-    const progressElement = targetElement.querySelector('tp-yt-paper-progress');
+const createSliderListener = () => {
+  const progressBar = document.querySelector('#progress-bar');
+  if (!progressBar) return sliderListener = null;
 
-    const observer = new MutationObserver((mutationsList) => {
-      for (let mutation of mutationsList) {
-        if (mutation.type === 'attributes' && mutation.attributeName === 'aria-valuenow') {
-          const now = mutation.target.getAttribute('aria-valuenow');
-          const max = mutation.target.getAttribute('aria-valuemax');
-          
-          chrome.runtime.sendMessage({ action: 'updateRpc', now, max });
-          break;
+  let prevNow = null;
+  let idleTimer = null;
+
+  const observer = new MutationObserver((mutationsList) => {
+    clearTimeout(idleTimer);
+
+    idleTimer = setTimeout(() => {
+      console.log('[YTM-RPC] (SLIDER) => Timer tetiklendi.');
+      chrome.runtime.sendMessage({ listener: 'updateRpc', action: 'idle' });
+    }, 3000);
+
+    for (const mutation of mutationsList) {
+      if (mutation.type === 'attributes' && mutation.attributeName === 'aria-valuenow') {
+        const now = mutation.target.getAttribute('aria-valuenow');
+        const max = mutation.target.getAttribute('aria-valuemax');
+
+        if (now !== prevNow) {
+          console.log('[YTM-RPC] (SLIDER) =>', now, max);
+          chrome.runtime.sendMessage({ listener: 'updateRpc', action: 'listening', now, max });
+          prevNow = now;
+          prevMax = max;
         }
       }
-    });
+    }
+  });
 
-    observer.observe(progressElement, { attributes: true });
-  }
-}
+  observer.observe(progressBar, { attributes: true });
+};
+
+const initializeSliderListener = () => {
+  if (!sliderListener)
+    sliderListener = createSliderListener();
+};
 
 chrome.runtime.onMessage.addListener((request) => {
-  if (request.action == 'sliderListener') sliderListener();
+  if (request.action === 'sliderListener')
+    initializeSliderListener();
 });

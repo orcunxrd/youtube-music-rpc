@@ -34,12 +34,13 @@ global.rpcSettings = {
 // Actions
 const actions = { setRpc, updateRpc, removeRpc };
 
-app.ws('/', async (ws, req) => {
+app.ws('/', async (ws, _req) => {
   console.log('A client connected.');
 
   ws.on('message', async (message) => {
-    const { action, data } = JSON.parse(message);
-    await actions[action](data);
+    const { listener, data } = JSON.parse(message);
+    console.log('[YTM-RPC] (ON-MESSAGE) =>', message);
+    await actions[listener](data || {});
   });
 
   ws.on('close', async () => {
